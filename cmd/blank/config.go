@@ -2,16 +2,25 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"github.com/anruin/go-blank/pkg/monitoring"
 	"github.com/anruin/go-blank/pkg/names"
-	"fmt"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/viper"
 	"strings"
 )
 
+const (
+	CfgShutdownTimeout string = "shutdown.timeout"
+)
+
+type Shutdown struct {
+	Timeout int64 `mapstructure:"timeout"`
+}
+
 // Service configuration.
 type Config struct {
+	Shutdown   Shutdown          `mapstructure:"shutdown"`
 	Monitoring monitoring.Config `mapstructure:"monitoring"`
 }
 
@@ -59,6 +68,9 @@ func (c *Config) SetupDefaults() {
 	// Default monitoring configuration.
 	viper.SetDefault(monitoring.CfgHost, "")
 	viper.SetDefault(monitoring.CfgPort, "8080")
+	viper.SetDefault(monitoring.CfgTimeout, 3)
+
+	viper.SetDefault(CfgShutdownTimeout, 30)
 }
 
 func (c *Config) SetupEnvironmentVariables() {

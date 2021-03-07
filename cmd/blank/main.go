@@ -3,7 +3,10 @@ package main
 import (
 	"context"
 	"github.com/anruin/go-blank/pkg/monitoring"
+	"github.com/anruin/go-blank/pkg/names"
+	"github.com/anruin/go-blank/pkg/sync"
 	log "github.com/sirupsen/logrus"
+	"golang.org/x/sync/errgroup"
 	"os"
 	"os/signal"
 	"time"
@@ -25,6 +28,11 @@ func main() {
 		log.Panicf("failed to process flags: %v", err)
 	}
 
+	// Initialize sync.
+	if ctx, err = sync.Initialize(ctx); err != nil {
+		log.Panicf("failed to initialize sync: %v", err)
+	}
+
 	// Initialize monitoring.
 	if ctx, err = monitoring.Initialize(ctx, cfg.Monitoring); err != nil {
 		log.Panicf("failed to initialize monitoring: %v", err)
@@ -40,11 +48,30 @@ func main() {
 	// Cancel the main context to close all nested contexts.
 	cancel()
 
-	// Create a new context with timeout to wait for goroutines to shutdown gracefully.
-	q, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	shutdown(cfg, ctx, err)
+}
 
-	select {
-	case <-q.Done():
-		log.Infof("quit")
+func shutdown(cfg Config, ctx context.Context, err error) {
+	// Create a new context with timeout to wait for goroutines to shutdown gracefully.
+	exitCtx, cancel := context.WithTimeout(context.Background(), time.Second*(time.Duration)(cfg.Shutdown.Timeout))
+
+	// Run utility goroutine to exit by timeout.
+	go func() {
+		select {
+		case <-exitCtx.Done():
+			log.Infof("shutdown timeout")
+			os.Exit(0)
+		}
+	}()
+
+	// Wait for the error group to finish.
+	errGroup := ctx.Value(names.CtxErrGroup).(*errgroup.Group)
+	if err = errGroup.Wait(); err != nil {
+		log.Errorf("failed to wait for error group goroutines to finish: %v", err)
+	} else {
+		log.Debugf("all goroutines exited")
 	}
+
+	// Cancel context if finished before timeout.
+	cancel()
 }

@@ -2,10 +2,11 @@ package monitoring
 
 import (
 	"context"
-	"github.com/anruin/go-blank/pkg/names"
 	"fmt"
+	"github.com/anruin/go-blank/pkg/names"
 	"github.com/gorilla/mux"
 	log "github.com/sirupsen/logrus"
+	"golang.org/x/sync/errgroup"
 	"net"
 	"net/http"
 	"strconv"
@@ -66,40 +67,53 @@ func Initialize(ctx context.Context, cfg Config) (context.Context, error) {
 	ctx = context.WithValue(ctx, names.CtxMonitoring, s)
 
 	// #1: Main monitoring server goroutine.
-	go func() {
-		log.Infof("monitoring #1")
-		log.Infof("monitoring server listens at: %s", s.Http.Addr)
-		if err := s.Http.ListenAndServe(); err != http.ErrServerClosed {
-			log.Errorf("failed to start monitoring server: %v", err)
-		} else {
-			log.Infof("monitoring server closed: %v", err)
-		}
-	}()
 
-	// #2: Utility goroutine to wait for the main context cancel.
-	go func() {
-		log.Infof("monitoring #2")
-		select {
-		case <-ctx.Done(): // #1 Exit
-			log.Infof("closing monitoring server")
-
-			t := 3 * time.Second
-
-			// Wait for graceful shutdown.
-			c, cancel := context.WithTimeout(context.Background(), t)
-			if err := s.Http.Shutdown(c); err != nil {
-				log.Errorf("failed to shutdown server: %v", err)
+	if g, ok := ctx.Value(names.CtxErrGroup).(*errgroup.Group); !ok {
+		log.Panicf("failed to get errgroup")
+	} else {
+		g.Go(func() error {
+			log.Debugf("monitoring #1")
+			log.Infof("monitoring server listens at: %s", s.Http.Addr)
+			if err := s.Http.ListenAndServe(); err != http.ErrServerClosed {
+				log.Errorf("failed to start monitoring server: %v", err)
+				return err
+			} else {
+				log.Infof("monitoring server closed: %v", err)
 			}
+			return nil
+		})
 
-			// Wait for the server shutdown and quit the utility goroutine.
+		// #2: Utility goroutine to wait for the main context cancel.
+		g.Go(func() error {
+			log.Debugf("monitoring #2")
 			select {
-			case <-c.Done():
-				cancel() // #2 Exit
-			case <-time.After(t):
+			case <-ctx.Done(): // #1 Exit
+				log.Debugf("closing monitoring server")
+
+				t := time.Duration(cfg.Timeout) * time.Second
+
+				// Wait for graceful shutdown.
+				c, cancel := context.WithTimeout(context.Background(), t)
+				if err := s.Http.Shutdown(c); err != nil {
+					log.Errorf("failed to shutdown server: %v", err)
+				} else {
+					cancel()
+				}
+
+				// Wait for the server shutdown and quit the utility goroutine.
+				select {
+				case <-c.Done():
+					log.Infof("closed monitoring server")
+				case <-time.After(t):
+					log.Errorf("monitoring server close timeout")
+				}
+
 				cancel() // #2 Exit
 			}
-		}
-	}()
+
+			return nil
+		})
+	}
 
 	return ctx, nil
 }

@@ -8,4 +8,5 @@ require (
 	github.com/lib/pq v1.0.0
 	github.com/sirupsen/logrus v1.4.1
 	github.com/spf13/viper v1.7.1
+	golang.org/x/sync v0.0.0-20190423024810-112230192c58
 )
