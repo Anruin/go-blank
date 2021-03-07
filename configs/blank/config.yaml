@@ -1,0 +1,9 @@
+monitoring:
+  host:
+  port: 8080
+pg:
+  host: 127.0.0.1
+  port: 5432
+  name: postgres
+  user: postgres
+  pass:
