@@ -2,12 +2,13 @@ package pg
 
 import (
 	"context"
+	"fmt"
 	"github.com/anruin/go-blank/pkg/monitoring"
 	"github.com/anruin/go-blank/pkg/names"
-	"fmt"
 	"github.com/jmoiron/sqlx"
 	_ "github.com/lib/pq"
 	log "github.com/sirupsen/logrus"
+	"golang.org/x/sync/errgroup"
 )
 
 func Initialize(ctx context.Context, cfg Config) (context.Context, error) {
@@ -16,7 +17,7 @@ func Initialize(ctx context.Context, cfg Config) (context.Context, error) {
 		handler.SetStatus(monitoring.StatusOk)
 	}
 
-	log.Infof("connecting to the database: host=%s port=%d user=%s name=%s", cfg.Host, cfg.Port, cfg.User, cfg.Name)
+	log.Debugf("connecting to the database")
 
 	// Open connection to the database;
 	connStr := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=disable", cfg.Host, cfg.Port, cfg.User, cfg.Pass, cfg.Name)
@@ -40,25 +41,35 @@ func Initialize(ctx context.Context, cfg Config) (context.Context, error) {
 		}
 
 		// Utility goroutine to close the database connection at context cancel.
-		go func() {
-			select {
-			case <-ctx.Done():
-				if err := CloseConnection(ctx); err != nil {
-					log.Errorf("failed to close database connection: %v", err)
-					// Update monitoring status.
-					if handler, ok := ctx.Value(names.CtxMonitoring).(*monitoring.Server); ok {
-						handler.SetStatus(monitoring.StatusError)
+		if g, ok := ctx.Value(names.CtxErrGroup).(*errgroup.Group); !ok {
+			log.Panicf("failed to get errgroup")
+		} else {
+			log.Tracef("go pg #1 enter")
+			// #1: Database context goroutine.
+			g.Go(func() error {
+				select {
+				case <-ctx.Done():
+					if err := CloseConnection(ctx); err != nil {
+						log.Errorf("failed to close database connection: %v", err)
+						// Update monitoring status.
+						if handler, ok := ctx.Value(names.CtxMonitoring).(*monitoring.Server); ok {
+							handler.SetStatus(monitoring.StatusError)
+						}
+						log.Tracef("go monitoring #1 exit")
+						return err
 					}
 				}
-			}
-		}()
+				log.Tracef("go monitoring #1 exit")
+				return nil
+			})
+		}
 
 		return context.WithValue(ctx, names.CtxPgConn, conn), nil
 	}
 }
 
 func CloseConnection(ctx context.Context) error {
-	log.Infof("closing database connection")
+	log.Debugf("closing database connection")
 	if db, ok := ctx.Value(names.CtxPgConn).(*sqlx.DB); ok {
 		return db.Close()
 	}
